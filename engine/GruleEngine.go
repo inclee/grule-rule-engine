@@ -1,13 +1,14 @@
 package engine
 
 import (
+	"sort"
+	"time"
+
 	"github.com/hyperjumptech/grule-rule-engine/ast"
 	"github.com/hyperjumptech/grule-rule-engine/events"
 	"github.com/hyperjumptech/grule-rule-engine/pkg/eventbus"
 	"github.com/juju/errors"
 	"github.com/sirupsen/logrus"
-	"sort"
-	"time"
 )
 
 var (
@@ -99,76 +100,38 @@ func (g *GruleEngine) Execute(dataCtx *ast.DataContext, knowledge *ast.Knowledge
 
 			return err
 		}
-
 		// Select all rule entry that can be executed.
 		log.Tracef("Select all rule entry that can be executed.")
-		runnable := make([]*ast.RuleEntry, 0)
+		ruleEntries := make([]*ast.RuleEntry, 0)
 		for _, v := range knowledge.RuleEntries {
+			ruleEntries = append(ruleEntries, v)
+		}
+		sort.SliceStable(ruleEntries, func(i, j int) bool {
+			return ruleEntries[i].Salience > ruleEntries[j].Salience
+		})
+		for _, v := range ruleEntries {
 			// test if this rule entry v can execute.
 			can, err := v.Evaluate()
 			if err != nil {
 				log.Errorf("Failed testing condition for rule : %s. Got error %v", v.Name, err)
 				// No longer return error, since unavailability of variable or fact in context might be intentional.
 			}
-			// if can, add into runnable array
 			if can {
-				runnable = append(runnable, v)
-			}
-		}
-
-		// disabled to test the rete's variable change detection.
-		// knowledge.RuleContextReset()
-		log.Tracef("Selected rules %d.", len(runnable))
-
-		// If there are rules to execute, sort them by their Salience
-		if len(runnable) > 0 {
-			if len(runnable) > 1 {
-				sort.SliceStable(runnable, func(i, j int) bool {
-					return runnable[i].Salience > runnable[j].Salience
-				})
-			}
-			// Start rule execution cycle.
-			// We assume that none of the runnable rule will change variable so we set it to true.
-			cycleDone := true
-
-			for _, r := range runnable {
-				// reset the counter to 0 to detect if there are variable change.
-				dataCtx.VariableChangeCount = 0
-				log.Debugf("Executing rule : %s. Salience %d", r.Name, r.Salience)
-
-				// emit rule execute start event
 				RuleEntryPublisher.Publish(&events.RuleEntryEvent{
 					EventType: events.RuleEntryExecuteStartEvent,
-					RuleName:  r.Name,
+					RuleName:  v.Name,
 				})
-
-				err := r.Execute()
+				err = v.Execute()
 				if err != nil {
-					log.Errorf("Failed execution rule : %s. Got error %v", r.Name, err)
-					return errors.Trace(err)
+					log.Errorf("Failed execution rule : %s. Got error %v", v.Name, err)
 				}
-
-				// emit rule execute end event
 				RuleEntryPublisher.Publish(&events.RuleEntryEvent{
 					EventType: events.RuleEntryExecuteEndEvent,
-					RuleName:  r.Name,
+					RuleName:  v.Name,
 				})
-
-				//if there is a variable change, restart the cycle.
-				if dataCtx.VariableChangeCount > 0 {
-					cycleDone = false
-					break
-				}
-				// this point means no variable change, so we move to the next rule entry.
 			}
-			// if cycleDone is true, we are done.
-			if cycleDone {
-				break
-			}
-		} else {
-			// No more rule can be executed, so we are done here.
-			break
 		}
+
 	}
 	log.Debugf("Finished Rules execution. With knowledge base '%s' version %s. Total #%d cycles. Duration %d ms.", knowledge.Name, knowledge.Version, cycle, time.Now().Sub(startTime).Milliseconds())
 
