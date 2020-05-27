@@ -109,6 +109,7 @@ func (g *GruleEngine) Execute(dataCtx *ast.DataContext, knowledge *ast.Knowledge
 		sort.SliceStable(ruleEntries, func(i, j int) bool {
 			return ruleEntries[i].Salience > ruleEntries[j].Salience
 		})
+		cycleDone := true
 		for _, v := range ruleEntries {
 			// test if this rule entry v can execute.
 			can, err := v.Evaluate()
@@ -129,7 +130,15 @@ func (g *GruleEngine) Execute(dataCtx *ast.DataContext, knowledge *ast.Knowledge
 					EventType: events.RuleEntryExecuteEndEvent,
 					RuleName:  v.Name,
 				})
+				//if there is a variable change, restart the cycle.
+				if dataCtx.VariableChangeCount > 0 {
+					cycleDone = false
+					break
+				}
 			}
+		}
+		if cycleDone {
+			break
 		}
 
 	}
